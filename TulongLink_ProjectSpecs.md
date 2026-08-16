@@ -189,21 +189,22 @@ Transport
    |
    +-- BLETransport
    |
-   +-- WiFiTransport
+   +-- SMSTransport
+   |
+   +-- NearbyConnectionsTransport
    |
    +-- InternetTransport
 ```
 
-Only BLE needs to be implemented initially.
+BLE (§19–22, plus the broadcast alert layer in §57) is implemented
+first. SMS (§58) and Nearby Connections (§59) are now planned, not
+speculative — see those sections for the reasoning behind each.
 
 Future transports should be possible without redesigning the emergency message protocol.
 
-Potential future transports include:
+Further potential future transports:
 
-- Wi-Fi Direct
-- Nearby Connections
-- local Wi-Fi
-- Internet
+- local Wi-Fi, outside the Nearby Connections abstraction
 - other peer-to-peer technologies
 
 ---
@@ -510,6 +511,10 @@ Concept:
 --------------------------------
 ```
 
+SEND HELP is the Tulong/SOS trigger defined in §57: pressing it fires
+the broadcast alert beacon immediately, in parallel with — not blocking
+on — the category selection below.
+
 After category selection:
 
 ```text
@@ -690,6 +695,12 @@ Do not advertise:
 - emergency description
 - exact GPS
 - personal information
+
+This applies without exception to ordinary discovery advertisements —
+their only job is signaling that a TulongLink device is nearby, so they
+have no reason to carry anything sensitive. §57 defines the one
+deliberate exception: a separate, purpose-built alert-beacon
+advertisement, and only because its sensitive fields are encrypted.
 
 ---
 
@@ -873,7 +884,7 @@ Implement:
 - message deduplication
 - message validation
 
-Sensitive emergency information should not be exposed through BLE advertisements.
+Sensitive emergency information should not be exposed through BLE advertisements — the one narrow, encrypted exception is the alert beacon defined in §57, which exists precisely because it is encrypted; an unencrypted alert beacon would violate this rule, not satisfy it.
 
 Where practical, design the protocol so that relay devices can transport encrypted payloads without requiring access to sensitive contents.
 
@@ -892,6 +903,10 @@ Do not broadcast:
 - description
 - exact coordinates
 - medical information
+
+The one exception is the encrypted alert beacon in §57 — sensitive
+fields only ever leave a device in cleartext form via a BLE
+advertisement if this rule is being violated.
 
 The relay network should transport emergency payloads securely.
 
@@ -1177,6 +1192,10 @@ deviceId
 ```
 
 Use geospatial indexes if appropriate for incident mapping.
+
+`configurations` additionally needs the per-community fields defined in
+§58.5 (SMS responder numbers, SMS feature flag) to support the SMS
+transport.
 
 ---
 
@@ -1683,7 +1702,297 @@ Alternative tagline:
 
 ---
 
-# 57. Ultimate Vision
+# 57. Encrypted Broadcast Alert Layer
+
+## 57.1 Purpose
+
+A second delivery tier alongside the connection-based relay in §19–22.
+Its only job is speed: get an alarm to every nearby TulongLink device —
+including one that never opens a connection, never becomes a relay hop,
+and is just passing by — as fast as physically possible.
+
+This does not replace the connection-based relay. It runs alongside it.
+The broadcast alert carries a compact "something is wrong nearby"
+signal; the full incident record still propagates through the existing
+multi-hop store-and-forward mechanism.
+
+## 57.2 Trigger
+
+SEND HELP (§15) is a single Tulong/SOS action. Pressing it:
+
+1. Immediately begins transmitting the alert beacon (57.3).
+2. Opens the category/description flow (§14–15) in parallel, not as a
+   blocking prerequisite.
+3. Once category/description are provided, or a short timeout elapses
+   with a default category, the full EmergencyMessage (§53) is created
+   locally and enters the normal relay pipeline (§19–22).
+
+The alert beacon must never wait on category selection. A resident who
+presses Tulong and immediately loses the ability to interact with the
+phone has still triggered an alert.
+
+## 57.3 Alert beacon mechanism
+
+Distinct from the standard peer-discovery advertisement in §20. A
+dedicated advertisement type, identified by its own service UUID,
+broadcasting an encrypted payload — received by passive BLE scanning
+alone, no GATT connection required.
+
+Advertisement contents (BLE 5 extended advertising target; see 57.6 for
+devices without it):
+
+```text
+alertServiceUuid   (fixed, identifies this as a TulongLink alert)
+protocolVersion
+shortMessageId     (truncated form of the full message ID)
+priority           (CRITICAL / HIGH / NORMAL — unencrypted, so a
+                    receiving device can prioritize without decrypting
+                    first)
+encryptedPayload:
+    latitude
+    longitude
+    locationAccuracy
+    category
+    originTimestamp
+authTag            (integrity check over the encrypted payload)
+```
+
+Everything else follows the rules already established for discovery
+advertisements: no device name, no phone number, no description text.
+
+## 57.4 Encryption
+
+Payload encryption uses a symmetric key issued per community at device
+registration (§10), while the device still has Internet access, and
+stored in Android Keystore rather than application storage.
+
+Only devices enrolled in that community can decrypt an alert broadcast
+from it. A device outside the community, or any non-TulongLink BLE
+scanner, receives ciphertext.
+
+This does not replace per-device message signing (§26); it solves a
+different problem. Signing proves who sent a message. This encryption
+hides the sensitive fields from anyone who isn't a legitimate recipient
+in the first place — necessary here specifically because, unlike a GATT
+connection, a BLE advertisement has no access control: anyone with any
+BLE receiver in range can capture it.
+
+## 57.5 Amendment to §20 / §27 / §28
+
+The existing rule — BLE advertisements must never carry exact GPS or
+other sensitive fields — continues to apply without exception to
+ordinary peer-discovery advertisements. Their only job is signaling
+that a TulongLink device is nearby; they have no reason to carry
+anything sensitive, ever.
+
+The alert beacon defined here is the one deliberate, narrow exception,
+and only because the sensitive fields inside it are encrypted per 57.4.
+An unencrypted alert beacon is not a smaller violation of §20/§27/§28 —
+it is exactly the violation those sections exist to prevent, and must
+never ship.
+
+## 57.6 Propagation and degradation
+
+Receiving devices SHOULD re-broadcast a received alert beacon for a
+bounded number of hops / bounded TTL, reusing the TTL and
+deduplication mechanics already defined in §23–25 — a beacon is a very
+small, broadcast-only message, and needs the same duplicate suppression
+any other relayed message needs, or a busy area produces an advertising
+storm.
+
+Devices without BLE 5 extended advertising support can still receive
+and act on the alert layer at reduced fidelity: legacy 31-byte
+advertisements are tight but workable for a truncated ID, priority, and
+a smaller encrypted payload using fixed-point rather than
+floating-point coordinates. Devices that cannot advertise at all in
+this mode simply rely on the connection-based relay for the full
+message, as already designed. No device is excluded from TulongLink by
+lacking this capability — it degrades, it doesn't gate.
+
+## 57.7 Decision record
+
+- **Decision:** add a connectionless, encrypted BLE advertisement tier
+  for the initial alert, separate from the connection-based relay.
+- **Reason:** a GATT peripheral link generally serves one central
+  connection at a time; broadcast reception has no such limit, and gets
+  the alarm to a crowd — the highest-value scenario — without a
+  connection queue.
+- **Alternatives considered:** GATT-only delivery (already designed,
+  §19–22) — kept as the transport for the full record; unencrypted
+  broadcast (rejected, see 57.5).
+- **Advantages:** faster alert delivery than any connection-based
+  approach can offer; works for a device that never connects to
+  anything; lower implementation risk than the multi-hop GATT relay,
+  since it needs only advertise + scan, not the peripheral+central dual
+  role under validation in the Milestone 0 spike.
+- **Limitations:** legacy-advertising devices get a smaller payload;
+  community-key compromise would expose that community's alert
+  payloads, mitigated by Keystore-backed storage and, longer-term, key
+  rotation at next sync — full instant revocation across an offline
+  mesh remains an open limitation, as already noted in §46.
+- **Future migration path:** if extended advertising proves unreliable
+  on target hardware during field testing, fall back to a shorter
+  fixed-point-encoded payload within the legacy 31-byte budget rather
+  than abandoning the broadcast tier.
+
+---
+
+# 58. SMS Transport
+
+## 58.1 Purpose
+
+A fourth transport, alongside BLE, Nearby Connections (§59), and
+Internet (§6/§41).
+
+Reaches a responder's ordinary phone with no TulongLink installation
+required on their end. Works at signal levels too weak for data. A
+gateway-delivery fallback, not a replacement for the API upload defined
+in §30/§41.
+
+## 58.2 When it fires
+
+Any device acting as a gateway (§30) that detects SMS-capable signal
+attempts SMS delivery to the community's configured responder number,
+in parallel with the normal HTTPS upload attempt — whichever succeeds
+first still results in a delivery receipt (§16, §31).
+
+Do not treat SMS as inferior evidence of delivery. Record which
+transport actually succeeded — §16's delivery states gain an
+`SMS_SENT` state, distinct from `SERVER_RECEIVED` — a resident should
+know their SMS-only community responder was reached even before the
+server confirms receipt through the normal path.
+
+## 58.3 Payload
+
+SMS has no room for the full JSON incident record. Compact, fixed-order
+text format:
+
+```text
+TULONGLINK|<shortMessageId>|<category>|<priority>|<lat>,<lon>|<timestamp>
+```
+
+Kept inside a single GSM-7 segment (160 characters) wherever possible.
+Concatenated multi-segment SMS is allowed as a fallback, not the
+default — it costs more and is less reliable on constrained networks.
+
+## 58.4 Permission model
+
+Sending SMS programmatically on Android requires either the app be the
+user's default SMS handler, or a Google Play exception granted for
+exactly this use case — neither guaranteed, and Play's review of the
+exception is case-by-case, not automatic.
+
+Two build-time delivery modes, chosen by distribution channel:
+
+- **Direct build** (sideloaded / pilot deployment, e.g. Napo): request
+  `SEND_SMS`, send automatically and silently. No Play Store
+  distribution involved, so the restriction above does not apply.
+- **Play Store build** (future commercial distribution): default to an
+  SMS intent that pre-fills the message in the resident's own SMS app
+  for a one-tap manual send. Requires no special permission. If the
+  Play exception is later granted for this build, upgrade to automatic
+  send.
+
+The active mode is a compile-time configuration flag, not a runtime
+toggle — an automatic-send path must never be reachable in a build that
+hasn't actually been granted the exception.
+
+## 58.5 Configuration
+
+Each community's `configurations` record (§40) needs:
+
+```text
+smsResponderNumbers   (one or more numbers, community-configured)
+smsEnabled            (feature flag; some communities may not want this)
+```
+
+## 58.6 Decision record
+
+- **Decision:** add SMS as a formal transport for gateway delivery.
+- **Reason:** reaches a responder even if they run no software at all,
+  and works below the signal threshold data requires — genuinely new
+  resilience, not a convenience feature.
+- **Alternatives considered:** data-only gateway delivery (already
+  designed; kept as the primary path) — SMS is additive, not a
+  replacement.
+- **Advantages:** no dependency on the responder having a smartphone or
+  app; works on weaker signal than data.
+- **Limitations:** Play Store distribution constrains automatic
+  sending (58.4); SMS payload size forces a lossy summary, not the full
+  record — the full record still needs the data/API path eventually.
+- **Future migration path:** the server could additionally expose an
+  inbound SMS number/shortcode as a second ingest path, independent of
+  any device — not required for MVP, worth revisiting once the primary
+  device-to-responder-phone path is proven.
+
+---
+
+# 59. Nearby Connections Escalation Transport
+
+## 59.1 Purpose
+
+A higher-throughput, longer-range transport for scenarios BLE alone
+cannot carry well — a crowded evacuation center, a deliberate community
+response event. Built on Android's Nearby Connections API, not a
+hand-rolled Wi-Fi hotspot bridge.
+
+## 59.2 Why Nearby Connections instead of raw Wi-Fi hotspot toggling
+
+Simultaneous Wi-Fi client + hotspot mode ("STA+AP concurrency") exists
+in Android but is chipset/OEM-dependent, not universal — some devices
+get true simultaneous operation, some share one radio with degraded
+throughput, some don't support it at all. On the mixed, largely
+budget-tier Android hardware this project targets, "everyone turn on
+both" will work unpredictably device to device, with no clear way for a
+non-technical resident to know which case their phone falls into.
+
+Nearby Connections solves the same underlying problem — proximity data
+exchange beyond BLE's range/throughput — by negotiating the best
+transport combination (BLE, Wi-Fi Direct, local hotspot) per device
+pair at runtime, and degrading gracefully to whatever is actually
+available instead of failing outright.
+
+## 59.3 Activation model
+
+Not always-on. A resident or barangay staff member explicitly enables
+"Community Wi-Fi Hub" mode — a deliberate, visible toggle, not a
+background default — given its materially higher battery cost than the
+base BLE relay (§43).
+
+Typical activation: barangay staff at an evacuation center, or a
+resident during a known, ongoing community response event.
+
+## 59.4 Relationship to the base relay
+
+Additive. When active, it runs alongside — not instead of — the BLE
+relay (§19–22) and the alert beacon (§57). The same EmergencyMessage /
+protocol types (§53) travel over whichever transport is available;
+Nearby Connections is a `Transport` implementation like `BLETransport`,
+selected by the same transport abstraction (§5).
+
+## 59.5 Decision record
+
+- **Decision:** use Nearby Connections API for the higher-throughput
+  transport tier; do not hand-roll Wi-Fi hotspot bridging.
+- **Reason:** avoids taking on inconsistent, hard-to-diagnose behavior
+  across the exact device mix this project targets (59.2).
+- **Alternatives considered:** manual Wi-Fi hotspot + client toggling
+  as originally proposed — rejected for the reasons in 59.2; Wi-Fi
+  Direct used directly, without Nearby Connections' negotiation layer —
+  rejected as reinventing what Nearby Connections already provides.
+- **Advantages:** graceful degradation instead of hard failure on
+  unsupported hardware; one API surface instead of hand-rolled
+  transport-selection logic.
+- **Limitations:** still meaningfully more battery cost than BLE, hence
+  the opt-in model (59.3); adds a dependency on Google Play services,
+  which needs confirming against this project's minimum supported
+  Android/Play-services baseline before Phase 4 implementation.
+- **Future migration path:** none anticipated; revisit only if Nearby
+  Connections itself is deprecated.
+
+---
+
+# 60. Ultimate Vision
 
 TulongLink should eventually become a resilient communication platform where:
 
