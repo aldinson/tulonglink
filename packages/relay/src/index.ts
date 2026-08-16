@@ -7,3 +7,4 @@ export * from "./messageSummary.js";
 export * from "./ttl.js";
 export * from "./validation.js";
 export * from "./handshake.js";
+export * from "./gateway.js";

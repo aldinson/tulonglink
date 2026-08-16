@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CreateEmergencyInput } from "@tulonglink/shared";
+import type { EmergencyMessage } from "@tulonglink/protocol";
 import { buildEmergencyMessage } from "./message.js";
 import { createInMemoryRelayStore } from "./inMemoryRelayStore.js";
 import { createSimulatedPeerPair } from "./simulatedTransport.js";
 import { runSync } from "./handshake.js";
+import { runGatewayUpload } from "./gateway.js";
 import type { RelayStore } from "./store.js";
 
 /**
@@ -76,5 +78,26 @@ describe("multi-hop relay (simulated)", () => {
 
     expect(outcomeC.storedMessageIds).toEqual([]);
     expect(await storeC.listKnownIds()).toEqual(["device-a:msg-1"]);
+  });
+
+  it("reaches the server through a gateway that isn't adjacent to the originator: A -> B -> C -> D -> Server (spec §44, §47)", async () => {
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const storeA = createInMemoryRelayStore([message]);
+    const storeB = createInMemoryRelayStore([]);
+    const storeC = createInMemoryRelayStore([]);
+    const storeD = createInMemoryRelayStore([]);
+
+    await sync(storeA, storeB, "device-a", "device-b");
+    await sync(storeB, storeC, "device-b", "device-c");
+    await sync(storeC, storeD, "device-c", "device-d");
+    expect(await storeD.hasMessage("device-a:msg-1")).toBe(true);
+
+    // D is the only device with "Internet" in this scenario — B and C
+    // never see the fake server at all.
+    const serverReceived: EmergencyMessage[] = [];
+    const result = await runGatewayUpload(storeD, async (m) => void serverReceived.push(m));
+
+    expect(result.uploadedMessageIds).toEqual(["device-a:msg-1"]);
+    expect(serverReceived.map((m) => m.messageId)).toEqual(["device-a:msg-1"]);
   });
 });

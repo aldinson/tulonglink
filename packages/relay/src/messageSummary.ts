@@ -7,7 +7,8 @@ import type { RelayStore } from "./store.js";
  * testing (Phase 7) shows a real device's message count makes this too
  * large — not before, per CLAUDE.md's "smallest correct solution."
  */
-export async function buildMessageSummary(store: RelayStore): Promise<{ knownIds: string[] }> {
+export async function buildMessageSummary(store: RelayStore, now: Date = new Date()): Promise<{ knownIds: string[] }> {
+  await store.pruneExpired(now);
   return { knownIds: await store.listKnownIds() };
 }
 

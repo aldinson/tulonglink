@@ -19,9 +19,21 @@ cross-path deduplication, both integration-tested — see
 `packages/relay/src/integration.test.ts`). The other half — the real
 native BLE plugin — is not implemented: `apps/android/src/BleRelayPlugin.ts`
 defines the interface it must satisfy, but there's no Android Studio/SDK
-in this environment to build or verify Kotlin against, and no responder
-dashboard yet either. See `apps/android/README.md` for exactly what's
-left and why it needs physical devices.
+in this environment to build or verify Kotlin against. See
+`apps/android/README.md` for exactly what's left and why it needs
+physical devices.
+
+**Phase 4** (multi-hop relay, spec §44-45/§48) is also scoped and
+implemented at the same transport-independent layer: `packages/relay`
+now prunes expired messages out of what it offers to peers (closing a
+Phase 3 gap — an expired message no longer propagates forever), survives
+a peer disconnecting mid-sync without losing already-transferred
+progress (`SyncOutcome.interrupted`), and `packages/relay/src/gateway.ts`
+uploads relayed messages to the server once a device has Internet,
+without removing them from what it still offers to other peers. The full
+`A → B → C → D → Server` chain — spec §44's minimum target and §47's
+literal MVP proof — is integration-tested in simulation. No responder
+dashboard yet; that's Phase 5.
 
 ## Layout
 
@@ -35,7 +47,8 @@ left and why it needs physical devices.
   /shared     Types + zod validation shared by web and api
   /protocol   Transport-independent message envelope (spec §53)
   /sync       Persistence-agnostic sync queue orchestration (spec §32)
-  /relay      BLE-agnostic peer sync engine: handshake, dedup, TTL, validation (spec §19-22)
+  /relay      BLE-agnostic peer sync + gateway engine: handshake, dedup, TTL,
+              validation, interrupted-sync recovery, server upload (spec §19-22, §44-45)
 ```
 
 `packages/database`, `packages/crypto`, `packages/ui` don't exist yet —
@@ -107,15 +120,16 @@ npm run test        # vitest across all workspaces
 npm run typecheck    # tsc --noEmit across all workspaces
 ```
 
-Verified passing (40/40 tests, clean typecheck, clean `vite build` with
+Verified passing (47/47 tests, clean typecheck, clean `vite build` with
 the PWA service worker generated) on an NTFS copy of this tree, for the
 reason noted above.
 
 Mostly unit-level: `packages/shared`'s validation, `packages/sync`'s
 queue logic, the API's token/OTP services, and the web app's offline
 emergency-creation path (via `fake-indexeddb`). `packages/relay` adds
-integration tests too — multi-hop relay and cross-path dedup over a
-simulated transport — but nothing here touches real Bluetooth hardware
+integration tests too — multi-hop relay, cross-path dedup, and the full
+`A → B → C → D → Server` gateway chain, all over a simulated
+transport/fake upload — but nothing here touches real Bluetooth hardware
 or a real MongoDB. Add a Mongo integration suite (e.g. with
 `mongodb-memory-server`) when that's worth the added dependency; a real
 BLE proof needs the native plugin and physical devices (see
@@ -209,6 +223,51 @@ Migration path, per `CLAUDE.md`.
 - **Migration path:** Phase 6 adds a signature field to `EmergencyMessage`
   and a check in `packages/relay/src/validation.ts` alongside the
   existing hash check, without changing the handshake sequence.
+
+### Gateway upload is a new function, not a reuse of `packages/sync`'s `processSyncQueue`
+- **Reason:** `processSyncQueue` removes an item from its store once
+  upload succeeds — correct for Milestone 1's Device→Server queue, wrong
+  for relayed messages: a device that successfully uploads a message to
+  the server must keep offering that same message to peers that haven't
+  seen it yet (spec §45). Upload status and "still relayable" are
+  genuinely different, simultaneously-true facts about one message.
+- **Alternatives:** generalize `processSyncQueue` with a "remove on
+  success" flag (rejected — adds a parameter that exists solely to
+  support a case its own docstring says isn't its job, for one caller);
+  keep messages in two separate stores, one for relay and one for
+  upload (rejected — that's the actual duplicate-source-of-truth
+  problem `packages/sync`'s own header comment already warned against
+  avoiding).
+- **Advantages:** `RelayStore.markUploaded`/`isUploaded` sit right next
+  to the data they describe; `runGatewayUpload` reads as exactly what it
+  does — upload whatever a device holds that the server doesn't have
+  yet — without also explaining why that's not deleting anything.
+- **Limitations:** two small pieces of near-identical retry-on-failure
+  logic now exist in the codebase (`processSyncQueue` and
+  `runGatewayUpload`) instead of one. Deliberate, given the semantic
+  mismatch above — see CLAUDE.md: three similar lines beat a premature
+  shared abstraction.
+- **Migration path:** none anticipated; revisit only if a third queue
+  with the same "never remove, just mark" shape shows up.
+
+### Interrupted sync returns a partial result instead of throwing
+- **Reason:** spec §42 requires tolerating "relay device disappearing"
+  and "partial synchronization." A real BLE disconnect will make
+  `PeerConnection.send`/`receive` reject; letting that propagate out of
+  `runSync` would hand a future caller managing many simultaneous peer
+  connections (the native bridge) an exception instead of the messages
+  that *did* transfer before the drop.
+- **Advantages:** the fix cost nothing structural — messages were
+  already being stored one at a time, not batched, so the only real
+  change was tracking `sentMessageIds` incrementally too and wrapping
+  the sequence in try/catch. `SyncOutcome.interrupted` makes "this
+  connection didn't finish cleanly" visible to the caller without it
+  needing to catch anything itself.
+- **Limitations:** a message that was mid-transfer (sent but the
+  receiver hadn't finished validating/storing it) is simply absent from
+  both sides' next summary and gets re-offered on the next connection —
+  no explicit resume-from-where-it-left-off logic. Acceptable: spec §45
+  already assumes exactly this kind of retry-via-next-opportunity.
 
 ### Auth: OTP + swappable provider, JWT with offline-tolerant session
 - **Reason:** spec §10 requires the OTP provider to be swappable (mock

@@ -81,4 +81,35 @@ describe("runSync", () => {
       { type: "DEVICE_HELLO", hello: { deviceId: "device-a", protocolVersion: 1, capabilities: [] } },
     ]);
   });
+
+  it("returns interrupted:true with whatever completed, when the peer disappears mid-transfer (spec §42)", async () => {
+    const message1 = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message2 = await buildEmergencyMessage(makePayload("device-a:msg-2"), "device-a", "2026-08-16T08:00:00.000Z");
+    const store = createInMemoryRelayStore([message1, message2]);
+
+    let sendCount = 0;
+    const flakyConnection: PeerConnection = {
+      peerId: "device-b",
+      async send(frame) {
+        sendCount += 1;
+        // 1st send = DEVICE_HELLO, 2nd = SYNC_REQUEST, 3rd = first
+        // EMERGENCY_MESSAGE (succeeds), 4th = second EMERGENCY_MESSAGE
+        // (peer has vanished by now).
+        if (sendCount === 4) throw new Error("peer disconnected");
+        void frame;
+      },
+      async receive() {
+        if (sendCount === 1) {
+          return { type: "DEVICE_HELLO", hello: { deviceId: "device-b", protocolVersion: 1, capabilities: [] } };
+        }
+        return { type: "SYNC_RESPONSE", response: { knownIds: [] } };
+      },
+      async close() {},
+    };
+
+    const outcome = await runSync(flakyConnection, store, "device-a", "INITIATOR");
+
+    expect(outcome.interrupted).toBe(true);
+    expect(outcome.sentMessageIds).toEqual(["device-a:msg-1"]);
+  });
 });
