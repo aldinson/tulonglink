@@ -7,30 +7,42 @@ priorities and working rules.
 
 ## Status
 
-**Milestone 1** (Phase 1 + 2 foundation) is scaffolded: monorepo, PWA
+**Milestone 1** (Phase 1 + 2 foundation) is complete: monorepo, PWA
 shell, Node/Mongo API, Docker Compose, IndexedDB, phone+OTP auth, and the
 **online-only** emergency-reporting path with accurate delivery-state UI.
-There is no BLE, no relay, and no responder dashboard yet — that's
-Phase 3 onward.
+
+**Phase 3** (BLE protocol, spec §19-22/§53) is scoped and its
+transport-independent half is implemented: `packages/relay` has the full
+peer-handshake/message-summary-sync/dedup/TTL/validation engine, proven
+via a simulated in-memory transport (multi-hop `A → B → C` relay and
+cross-path deduplication, both integration-tested — see
+`packages/relay/src/integration.test.ts`). The other half — the real
+native BLE plugin — is not implemented: `apps/android/src/BleRelayPlugin.ts`
+defines the interface it must satisfy, but there's no Android Studio/SDK
+in this environment to build or verify Kotlin against, and no responder
+dashboard yet either. See `apps/android/README.md` for exactly what's
+left and why it needs physical devices.
 
 ## Layout
 
 ```text
 /apps
   /web        React PWA (Vite, TS, Tailwind) — resident-facing app
-  /android    Capacitor shell (config only; see apps/android/README.md)
+  /android    Capacitor shell + BLE plugin interface (see apps/android/README.md)
 /services
   /api        Node/TS/Express/Mongo REST API
 /packages
   /shared     Types + zod validation shared by web and api
   /protocol   Transport-independent message envelope (spec §53)
   /sync       Persistence-agnostic sync queue orchestration (spec §32)
+  /relay      BLE-agnostic peer sync engine: handshake, dedup, TTL, validation (spec §19-22)
 ```
 
 `packages/database`, `packages/crypto`, `packages/ui` don't exist yet —
 nothing outside `services/api` touches Mongo, nothing signs messages
-(that starts with BLE in Phase 3), and there's only one UI consumer.
-They get created the moment a second consumer needs them.
+(signatures are Phase 6, see `packages/relay/src/validation.ts`), and
+there's only one UI consumer. They get created the moment a second
+consumer needs them.
 
 ## Running locally
 
@@ -95,15 +107,19 @@ npm run test        # vitest across all workspaces
 npm run typecheck    # tsc --noEmit across all workspaces
 ```
 
-Verified passing (22/22 tests, clean typecheck, clean `vite build` with
+Verified passing (40/40 tests, clean typecheck, clean `vite build` with
 the PWA service worker generated) on an NTFS copy of this tree, for the
 reason noted above.
 
-Unit-level only right now: `packages/shared`'s validation, `packages/sync`'s
+Mostly unit-level: `packages/shared`'s validation, `packages/sync`'s
 queue logic, the API's token/OTP services, and the web app's offline
-emergency-creation path (via `fake-indexeddb`). There is no integration
-suite hitting a real MongoDB yet — add one (e.g. with
-`mongodb-memory-server`) when that's worth the added dependency.
+emergency-creation path (via `fake-indexeddb`). `packages/relay` adds
+integration tests too — multi-hop relay and cross-path dedup over a
+simulated transport — but nothing here touches real Bluetooth hardware
+or a real MongoDB. Add a Mongo integration suite (e.g. with
+`mongodb-memory-server`) when that's worth the added dependency; a real
+BLE proof needs the native plugin and physical devices (see
+`apps/android/README.md`) and can't be a `vitest` suite at all.
 
 ## Architecture decisions (Milestone 1)
 
@@ -150,6 +166,49 @@ Migration path, per `CLAUDE.md`.
 
 ### `apps/android` is config-only, no generated native project
 - See `apps/android/README.md`.
+
+### `packages/relay` is a separate package from `packages/protocol`
+- **Reason:** `packages/protocol` holds wire message *shapes* (pure
+  data); the peer-handshake sequence (§21) is stateful *orchestration*
+  — the same split `packages/sync` already draws for queue
+  orchestration vs. the payload types it moves.
+- **Alternatives:** put the handshake logic inside `packages/protocol`
+  directly (rejected — conflates data shape with behavior, and
+  `packages/protocol` is meant to be usable by any transport, including
+  ones that never run this specific sync algorithm); put it in
+  `apps/android` (rejected — it isn't BLE-specific, and CLAUDE.md
+  requires no business logic in BLE-specific code).
+- **Advantages:** fully unit/integration-testable without hardware
+  (`packages/relay/src/simulatedTransport.ts`); a future SMS or Nearby
+  Connections transport (spec §58-59) reuses it unchanged, same as
+  `packages/sync` already does for Device→Server upload.
+- **Limitations:** none yet identified; revisit if a transport turns out
+  to need a materially different sync sequence, not just a different
+  `PeerConnection`.
+- **Migration path:** none needed — this is additive to the existing
+  package layout.
+
+### Message integrity uses a payload hash now; signatures wait for Phase 6
+- **Reason:** spec §26 requires detecting malformed/corrupted/replayed/
+  version-mismatched messages, all of which a SHA-256 payload hash +
+  zod schema + protocol-version + TTL check catch without any key
+  infrastructure. Signatures additionally prove *who* sent a message,
+  which needs device key issuance/storage/rotation — a Phase 6
+  (Security) concern the spec itself separates out.
+- **Alternatives:** build signing now alongside hashing (rejected —
+  no key-management package exists yet, and CLAUDE.md/dev rule #15 say
+  not to build ahead of the phase that needs it).
+- **Advantages:** zero new dependencies (`crypto.subtle.digest` is
+  available in both the browser and Node); still catches every failure
+  mode spec §26 lists except a malicious device tampering payload *and*
+  hash together, which only a signature actually prevents.
+- **Limitations:** a compromised or malicious relay hop could forge a
+  self-consistent (hash matches its own tampered payload) message right
+  now — acceptable for Phase 3's scope (proving the relay mechanism
+  works) but must close before field deployment.
+- **Migration path:** Phase 6 adds a signature field to `EmergencyMessage`
+  and a check in `packages/relay/src/validation.ts` alongside the
+  existing hash check, without changing the handshake sequence.
 
 ### Auth: OTP + swappable provider, JWT with offline-tolerant session
 - **Reason:** spec §10 requires the OTP provider to be swappable (mock

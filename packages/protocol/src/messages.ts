@@ -21,6 +21,13 @@ export interface EmergencyMessage {
   timestamp: string;
   payload: CreateEmergencyInput;
   payloadHash: string;
+  /**
+   * Message-level TTL (spec §25), separate from `Emergency.expiresAt`
+   * which is the same value at rest in the record store — duplicated
+   * here so a relay hop can decide whether to keep propagating a
+   * message without deserializing/looking up the full record.
+   */
+  expiresAt: string;
 }
 
 /**
@@ -36,3 +43,39 @@ export interface MessageReceipt {
   recordedByDeviceId: string;
   occurredAt: string;
 }
+
+/**
+ * Phase 3 peer-handshake vocabulary (spec §21, §53). Kept in this
+ * package (not packages/relay) because these are wire shapes, not
+ * orchestration logic — packages/relay imports them the same way it
+ * imports EmergencyMessage.
+ *
+ * CommunityAlert and Acknowledgement are deliberately not defined yet:
+ * CommunityAlert has no producer/consumer until the Phase 5 responder
+ * dashboard exists (spec §39), and Acknowledgement is the Phase 4
+ * ack-propagation-through-the-mesh concept (spec §30-31), not part of
+ * the two-peer sync sequence Phase 3 implements — that sequence (§21)
+ * ends at "Store", with no wire-level ack step. Adding either now would
+ * be a type with nothing to exercise it.
+ */
+export interface DeviceHello {
+  deviceId: string;
+  protocolVersion: number;
+  /** Reserved for future transport/feature negotiation (§58 SMS, §59 Nearby Connections, §57 alert beacon) — empty until one of those lands. */
+  capabilities: string[];
+}
+
+export interface SyncRequest {
+  knownIds: string[];
+}
+
+export interface SyncResponse {
+  knownIds: string[];
+}
+
+/** The envelope actually sent over a `PeerConnection` (packages/relay). */
+export type RelayFrame =
+  | { type: "DEVICE_HELLO"; hello: DeviceHello }
+  | { type: "SYNC_REQUEST"; request: SyncRequest }
+  | { type: "SYNC_RESPONSE"; response: SyncResponse }
+  | { type: "EMERGENCY_MESSAGE"; message: EmergencyMessage };

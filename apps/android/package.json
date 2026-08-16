@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "sync": "cap sync android"
+    "sync": "cap sync android",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@capacitor/core": "^6.1.2"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.1.2"
+    "@capacitor/cli": "^6.1.2",
+    "typescript": "^5.5.4"
   }
 }
