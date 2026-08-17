@@ -1,3 +1,4 @@
+import { generateDeviceKeyPair } from "@tulonglink/crypto";
 import { describe, expect, it } from "vitest";
 import type { CreateEmergencyInput } from "@tulonglink/shared";
 import type { EmergencyMessage } from "@tulonglink/protocol";
@@ -36,6 +37,8 @@ function makePayload(incidentId: string): CreateEmergencyInput {
   };
 }
 
+const signingKeys = await generateDeviceKeyPair();
+
 async function sync(storeInitiator: RelayStore, storeResponder: RelayStore, initiatorId: string, responderId: string) {
   const [connInitiator, connResponder] = createSimulatedPeerPair(initiatorId, responderId);
   return Promise.all([
@@ -46,7 +49,7 @@ async function sync(storeInitiator: RelayStore, storeResponder: RelayStore, init
 
 describe("multi-hop relay (simulated)", () => {
   it("relays a message across two hops: A -> B -> C", async () => {
-    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const storeA = createInMemoryRelayStore([message]);
     const storeB = createInMemoryRelayStore([]);
     const storeC = createInMemoryRelayStore([]);
@@ -59,7 +62,7 @@ describe("multi-hop relay (simulated)", () => {
   });
 
   it("does not duplicate a message that reaches C via two different paths (spec §24)", async () => {
-    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const storeA = createInMemoryRelayStore([message]);
     const storeB = createInMemoryRelayStore([]);
     const storeD = createInMemoryRelayStore([]);
@@ -81,7 +84,7 @@ describe("multi-hop relay (simulated)", () => {
   });
 
   it("reaches the server through a gateway that isn't adjacent to the originator: A -> B -> C -> D -> Server (spec §44, §47)", async () => {
-    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const storeA = createInMemoryRelayStore([message]);
     const storeB = createInMemoryRelayStore([]);
     const storeC = createInMemoryRelayStore([]);

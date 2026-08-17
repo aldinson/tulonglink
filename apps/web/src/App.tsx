@@ -12,6 +12,7 @@ import { EmergencyStatus } from "./pages/EmergencyStatus.js";
 import { EmergencyList } from "./pages/EmergencyList.js";
 import { IncidentQueue } from "./pages/dashboard/IncidentQueue.js";
 import { IncidentDetail } from "./pages/dashboard/IncidentDetail.js";
+import { Devices } from "./pages/admin/Devices.js";
 
 function AuthedApp() {
   useEffect(() => startAutoSync(), []);
@@ -25,6 +26,9 @@ function AuthedApp() {
         <Route element={<RequireRole roles={["STAFF", "ADMIN"]} />}>
           <Route path="/dashboard" element={<IncidentQueue />} />
           <Route path="/dashboard/incidents/:id" element={<IncidentDetail />} />
+        </Route>
+        <Route element={<RequireRole roles={["ADMIN"]} />}>
+          <Route path="/admin/devices" element={<Devices />} />
         </Route>
       </Route>
       <Route path="/login" element={<Login />} />

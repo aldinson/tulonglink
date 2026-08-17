@@ -6,9 +6,12 @@ import { useAuth } from "../context/AuthContext.js";
 /**
  * Spec §15's primary screen also has a SEND HELP / SOS beacon button
  * that fires immediately over the encrypted BLE broadcast layer (§57).
- * That requires both BLE (Phase 3) and the crypto package (deferred
- * until BLE exists) — out of scope for Milestone 1. Category selection
- * below is the only path to reporting right now.
+ * `packages/crypto` now exists (Phase 6, device signing keys), but §57's
+ * beacon needs a *different* key (a per-community symmetric key issued
+ * at registration) and the native BLE broadcast layer itself, which is
+ * still blocked on the missing Android SDK (see apps/android/README.md)
+ * — out of scope for Milestone 1. Category selection below is the only
+ * path to reporting right now.
  */
 const CATEGORIES: { category: EmergencyCategory; label: string }[] = [
   { category: "MEDICAL", label: "MEDICAL" },
@@ -22,6 +25,7 @@ const CATEGORIES: { category: EmergencyCategory; label: string }[] = [
 export function Home() {
   const { session } = useAuth();
   const isResponder = session && session.role !== "RESIDENT";
+  const isAdmin = session?.role === "ADMIN";
 
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col px-6 py-8">
@@ -58,6 +62,15 @@ export function Home() {
           className="mt-2 text-center text-sm font-medium text-gray-600 underline"
         >
           Responder Dashboard
+        </Link>
+      )}
+
+      {isAdmin && (
+        <Link
+          to="/admin/devices"
+          className="mt-2 text-center text-sm font-medium text-gray-600 underline"
+        >
+          Manage Devices
         </Link>
       )}
     </div>

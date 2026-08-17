@@ -29,6 +29,17 @@ describe("MockOtpProvider", () => {
     await expect(provider.verifyOtp("+639171234567", code)).resolves.toBe(false);
   });
 
+  it("invalidates the code after 5 incorrect attempts, even if the 6th guess is correct", async () => {
+    const provider = new MockOtpProvider();
+    await provider.requestOtp("+639171234567");
+    const code = provider.peekCode("+639171234567")!;
+
+    for (let i = 0; i < 5; i++) {
+      await expect(provider.verifyOtp("+639171234567", "000000")).resolves.toBe(false);
+    }
+    await expect(provider.verifyOtp("+639171234567", code)).resolves.toBe(false);
+  });
+
   it("rejects an expired code", async () => {
     vi.useFakeTimers();
     try {

@@ -49,6 +49,15 @@ export async function verifyOtp(req: Request, res: Response): Promise<void> {
 
   const existingDevice = await DeviceModel.findOne({ deviceId });
   if (existingDevice?.revoked) throw new HttpError(403, "Device has been revoked");
+  // Secure device registration (spec §11, §27): a deviceId is a stable
+  // identity once claimed — without this check, anyone who learns
+  // another device's ID could silently take it over on their next
+  // verify-otp call, since the update below is otherwise an unconditional
+  // upsert. A genuine reinstall on the same device reuses the same
+  // userId and hits this branch too, so it isn't blocked.
+  if (existingDevice && existingDevice.userId !== user.userId) {
+    throw new HttpError(409, "Device is already registered to a different account");
+  }
 
   const now = new Date().toISOString();
   await DeviceModel.findOneAndUpdate(

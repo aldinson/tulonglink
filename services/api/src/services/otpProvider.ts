@@ -4,6 +4,11 @@
  * the mock — a real provider (e.g. Twilio, Semaphore for PH numbers)
  * plugs in later by implementing this same interface and swapping it in
  * authController's construction, with no changes to the auth flow itself.
+ *
+ * Implementations must cap verification attempts per requested code
+ * (spec §27) — a real SMS provider typically enforces this itself, but
+ * nothing in `authController` re-checks it, so a provider that doesn't
+ * would reopen the brute-force gap `MockOtpProvider` closes below.
  */
 export interface OtpProvider {
   requestOtp(phoneNumber: string): Promise<void>;
@@ -12,10 +17,15 @@ export interface OtpProvider {
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const CODE_LENGTH = 6;
+/** Spec §27 "rate limiting" + brute-force resistance for a 6-digit code:
+ * caps guesses per requested code independent of (and in addition to)
+ * route-level rate limiting, so the cap holds even if that's misconfigured. */
+const MAX_ATTEMPTS = 5;
 
 interface PendingOtp {
   code: string;
   expiresAt: number;
+  attempts: number;
 }
 
 /**
@@ -31,7 +41,7 @@ export class MockOtpProvider implements OtpProvider {
     const code = Math.floor(Math.random() * 10 ** CODE_LENGTH)
       .toString()
       .padStart(CODE_LENGTH, "0");
-    this.pending.set(phoneNumber, { code, expiresAt: Date.now() + OTP_TTL_MS });
+    this.pending.set(phoneNumber, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0 });
     // eslint-disable-next-line no-console
     console.log(`[MockOtpProvider] OTP for ${phoneNumber}: ${code}`);
   }
@@ -43,6 +53,11 @@ export class MockOtpProvider implements OtpProvider {
       this.pending.delete(phoneNumber);
       return false;
     }
+    if (entry.attempts >= MAX_ATTEMPTS) {
+      this.pending.delete(phoneNumber);
+      return false;
+    }
+    entry.attempts += 1;
     const matches = entry.code === code;
     if (matches) this.pending.delete(phoneNumber);
     return matches;

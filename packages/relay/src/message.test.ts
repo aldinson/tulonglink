@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { CreateEmergencyInput } from "@tulonglink/shared";
+import { generateDeviceKeyPair } from "@tulonglink/crypto";
 import { buildEmergencyMessage, computePayloadHash } from "./message.js";
+
+const signingKeys = await generateDeviceKeyPair();
 
 const payload: CreateEmergencyInput = {
   incidentId: "device-a:11111111-1111-1111-1111-111111111111",
@@ -38,10 +41,12 @@ describe("computePayloadHash", () => {
 
 describe("buildEmergencyMessage", () => {
   it("reuses incidentId as messageId and computes a matching hash", async () => {
-    const message = await buildEmergencyMessage(payload, "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(payload, "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
 
     expect(message.messageId).toBe(payload.incidentId);
     expect(message.expiresAt).toBe(payload.expiresAt);
     expect(message.payloadHash).toBe(await computePayloadHash(payload));
+    expect(message.signature).toBeTruthy();
+    expect(message.originPublicKey).toBeTruthy();
   });
 });

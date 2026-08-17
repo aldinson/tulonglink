@@ -1,5 +1,5 @@
 {
-  "name": "@tulonglink/relay",
+  "name": "@tulonglink/crypto",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,11 +8,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@tulonglink/crypto": "*",
-    "@tulonglink/protocol": "*",
-    "@tulonglink/shared": "*"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

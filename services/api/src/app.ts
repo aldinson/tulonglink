@@ -6,7 +6,9 @@ import { authRouter } from "./routes/auth.js";
 import { userRouter } from "./routes/user.js";
 import { incidentRouter } from "./routes/incident.js";
 import { communityRouter } from "./routes/community.js";
+import { deviceRouter } from "./routes/device.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { generalRateLimiter } from "./middleware/rateLimit.js";
 
 export function createApp(): Express {
   const app = express();
@@ -19,10 +21,12 @@ export function createApp(): Express {
     res.status(200).json({ status: "ok" });
   });
 
+  app.use("/api", generalRateLimiter);
   app.use("/api/auth", authRouter);
   app.use("/api/users", userRouter);
   app.use("/api/incidents", incidentRouter);
   app.use("/api/communities", communityRouter);
+  app.use("/api/devices", deviceRouter);
 
   app.use(errorHandler);
 

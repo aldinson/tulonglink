@@ -50,6 +50,23 @@ below, is a local-dev-only stand-in) and no way for a resident's client
 to pull status changes back down — see the decision records below for
 both.
 
+**Phase 6** (security, spec §27-28/§46/§48) is implemented in two parts.
+Auth/device hardening: rate limiting on the OTP endpoints
+(`express-rate-limit`), a per-code attempt cap in `MockOtpProvider`,
+a fix for a real device-identity-hijack gap in `verifyOtp` (a `deviceId`
+could previously be silently reassigned to a different account), and
+ADMIN-only device revocation (`GET /api/devices`,
+`POST /api/devices/:deviceId/revoke`, plus a small `/admin/devices`
+page). Device signing: `packages/crypto` (Ed25519 via Web Crypto) is new
+— `EmergencyMessage` now carries a `signature` and `originPublicKey`,
+`packages/relay` signs on build and verifies on receipt, and every
+existing relay test was updated to build messages with a real signing
+keypair rather than an unsigned fixture. Server-side verification of
+`originPublicKey` against a device's registered key is still deferred —
+same reason as before: nothing hands the server a signed envelope yet,
+pending the native BLE plugin and the Phase 4 gateway-wiring that also
+depends on it.
+
 ## Layout
 
 ```text
@@ -64,13 +81,12 @@ both.
   /sync       Persistence-agnostic sync queue orchestration (spec §32)
   /relay      BLE-agnostic peer sync + gateway engine: handshake, dedup, TTL,
               validation, interrupted-sync recovery, server upload (spec §19-22, §44-45)
+  /crypto     Ed25519 device signing keys via Web Crypto (spec §26-27)
 ```
 
-`packages/database`, `packages/crypto`, `packages/ui` don't exist yet —
-nothing outside `services/api` touches Mongo, nothing signs messages
-(signatures are Phase 6, see `packages/relay/src/validation.ts`), and
-there's only one UI consumer. They get created the moment a second
-consumer needs them.
+`packages/database`, `packages/ui` don't exist yet — nothing outside
+`services/api` touches Mongo, and there's only one UI consumer. They
+get created the moment a second consumer needs them.
 
 ## Running locally
 
@@ -132,6 +148,14 @@ publishes 64-bit ARM (`arm64`) builds, i.e. Raspberry Pi 4/5 running a
 as-is; that would need a different database or a self-built MongoDB
 image, neither of which is in scope here.
 
+**HTTPS (spec §27):** the API itself speaks plain HTTP — TLS termination
+is a deployment-infra concern (reverse proxy, e.g. Caddy/nginx/Traefik,
+or the hosting platform), not application code. Building a Node-level
+HTTPS server here would cut against the Raspberry-Pi-friendly,
+infra-light design this whole section already assumes. Whatever sits in
+front of `services/api` in production must terminate TLS; this compose
+file does not do that for you.
+
 ### Tests / typecheck
 
 ```sh
@@ -139,7 +163,7 @@ npm run test        # vitest across all workspaces
 npm run typecheck    # tsc --noEmit across all workspaces
 ```
 
-Verified passing (65/65 tests, clean typecheck, clean `vite build` with
+Verified passing (83/83 tests, clean typecheck, clean `vite build` with
 the PWA service worker generated) on an NTFS copy of this tree, for the
 reason noted above.
 
@@ -149,24 +173,30 @@ emergency-creation path (via `fake-indexeddb`). `packages/relay` adds
 integration tests too — multi-hop relay, cross-path dedup, and the full
 `A → B → C → D → Server` gateway chain, all over a simulated
 transport/fake upload — still nothing here touches real Bluetooth
-hardware. `services/api` now also has real Mongo-backed controller
+hardware. `services/api` also has real Mongo-backed controller
 integration tests (`mongodb-memory-server` + `supertest`) for the Phase
-5 incident-action endpoints — the trigger condition this section used
-to say would justify adding it. A real BLE proof still needs the native
-plugin and physical devices (see `apps/android/README.md`) and can't be
-a `vitest` suite at all.
+5 incident-action endpoints and Phase 6's auth/device endpoints. `packages/crypto`'s
+Ed25519 sign/verify/tamper-detection tests run against Node's real
+WebCrypto (proven reliable already via `packages/relay`'s hash tests),
+and `apps/web`'s key-storage test runs the same code under jsdom's
+WebCrypto — both passed with no mocking needed. A real BLE proof still
+needs the native plugin and physical devices (see
+`apps/android/README.md`) and can't be a `vitest` suite at all.
 
-Phase 5 was additionally verified live: both dev servers running
-against a real (in-memory) MongoDB, driven end-to-end with `curl` —
-register, promote to STAFF, create an incident as a resident, then
-acknowledge → assign → start-progress (`PATCH`) → resolve as staff, and
-read back the audit trail — every step returned the expected
-state/delivery-state/event. The dashboard's own React components were
-verified by typecheck, a clean production build, and confirming every
-new module transforms without error through the Vite dev server; there
-was no browser control available in this session to click through the
-UI itself, so that specific layer — does it *render and look* right —
-is unverified and should be checked in a real browser before relying on it.
+Phases 5 and 6 were additionally verified live against a real
+(in-memory) MongoDB, driven end-to-end with `curl`: Phase 5's full
+register → promote → create → acknowledge → assign → start-progress
+(`PATCH`) → resolve → audit-trail flow; Phase 6's rate limiter (10
+requests succeed, the 11th gets `429`), the device-hijack rejection
+(`409` on a live hijack attempt), and the full list/revoke/blocked-relogin
+device-revocation flow (`403` on the revoked device's next login). The
+dashboard's own React components (Phase 5's queue/detail pages, Phase
+6's `/admin/devices` page) were verified by typecheck, a clean
+production build, and confirming every new module transforms without
+error through the Vite dev server; there was no browser control
+available in this session to click through the UI itself, so that
+specific layer — does it *render and look* right — is unverified and
+should be checked in a real browser before relying on it.
 
 ## Architecture decisions (Milestone 1)
 
@@ -356,6 +386,68 @@ Migration path, per `CLAUDE.md`.
 - **Migration path:** if a fourth named action becomes worth its own
   route later, move it out of the PATCH allowlist the same way
   acknowledge/assign/resolve already have their own routes.
+
+### Rate limiting is skipped under `NODE_ENV=test`, not loosened
+- **Reason:** the integration test suite exercises many auth/incident
+  flows in quick succession against one shared `app` instance (same
+  simulated IP) — a first pass at the OTP rate limiter (10 requests per
+  15 minutes, applied to both `request-otp` and `verify-otp`) made a
+  legitimate 3-step test scenario trip `429` well before any real abuse
+  pattern would. Raising the production limit to accommodate that would
+  have weakened the actual security value for no real reason.
+- **Alternatives:** give each test its own `createApp()` instance so
+  rate-limiter state doesn't accumulate (rejected — bigger change to
+  every existing test file's structure, for a problem the `skip` flag
+  solves in one place); raise the limit until tests stop failing
+  (rejected — the number would end up chosen by test convenience, not
+  by what's actually a reasonable production limit).
+- **Advantages:** the production limiter is tuned for production
+  reasoning (cost control + brute-force resistance, spec §27), completely
+  independent of how many requests any given test happens to make.
+- **Limitations:** the rate limiter itself is therefore never exercised
+  by the automated suite — it was verified live instead (see Tests
+  section above). If it regresses, only that live check or production
+  traffic would catch it.
+
+### `verifyOtp` rejects re-registering a `deviceId` to a different account
+- **Reason:** found by inspection, not reported — `DeviceModel` was
+  upserted by `deviceId` with no check that it wasn't already bound to
+  someone else, so any client that learned another device's ID could
+  silently take it over on its next `verify-otp` call. Spec §11 treats
+  `deviceId` as a stable identity; §27 asks for "secure device
+  registration" directly.
+- **Advantages:** closes the gap with a single ownership check, no
+  schema change, and a genuine reinstall (same user, same device) is
+  unaffected since it hits the same-owner branch.
+- **Limitations:** a user who loses a device and later wants that exact
+  `deviceId` back has no path to reclaim it (device IDs are meant to be
+  per-installation — see the "Device revocation" record below for the
+  actual recovery path: a new device generates a new ID).
+
+### `packages/crypto` is a new package; device revocation is ADMIN-only
+- **Reason:** this is the "second consumer" moment `README.md` already
+  flagged as the trigger for creating `packages/crypto` — both
+  `apps/web` (signs) and `packages/relay` (verifies) need the same
+  Ed25519 primitives. Device revocation is scoped to ADMIN specifically
+  because that's what spec §8.3 actually lists ("Revoke devices"); §8.1's
+  resident capability list has no device-management entry, so this
+  isn't resident self-service, even though "I lost my phone" self-revoke
+  would be user-friendly — the spec draws that line, not a convenience
+  judgment call.
+- **Limitations (crypto):** Web Crypto's `extractable` flag applies to
+  a whole generated key pair, not per-key, so the private key is
+  generated extractable rather than truly non-exportable — real
+  hardware-backed non-extractability only arrives with native Android
+  Keystore (Phase 3's still-pending native plugin). The private key is
+  stored as an exported JWK in IndexedDB (not the raw `CryptoKey`
+  object) specifically so it round-trips identically in a real browser
+  and under `fake-indexeddb` in tests — see
+  `packages/crypto/src/deviceKeys.ts` and
+  `apps/web/src/services/deviceKeyService.ts`.
+- **Migration path:** once BLE relay wiring exists, the server can
+  cross-check a message's `originPublicKey` against a device's
+  registered key at gateway-upload time — nothing about today's design
+  needs to change for that, it's purely an additional check.
 
 ### Auth: OTP + swappable provider, JWT with offline-tolerant session
 - **Reason:** spec §10 requires the OTP provider to be swappable (mock

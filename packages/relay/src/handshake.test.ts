@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { CreateEmergencyInput } from "@tulonglink/shared";
 import type { RelayFrame } from "@tulonglink/protocol";
+import { generateDeviceKeyPair } from "@tulonglink/crypto";
 import { buildEmergencyMessage } from "./message.js";
 import { createInMemoryRelayStore } from "./inMemoryRelayStore.js";
 import { createSimulatedPeerPair } from "./simulatedTransport.js";
 import { runSync } from "./handshake.js";
 import type { PeerConnection } from "./transport.js";
+
+const signingKeys = await generateDeviceKeyPair();
 
 function makePayload(incidentId: string): CreateEmergencyInput {
   return {
@@ -30,7 +33,7 @@ function makePayload(incidentId: string): CreateEmergencyInput {
 
 describe("runSync", () => {
   it("transfers a message A has and B doesn't, in one connection", async () => {
-    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const storeA = createInMemoryRelayStore([message]);
     const storeB = createInMemoryRelayStore([]);
     const [connA, connB] = createSimulatedPeerPair("device-a", "device-b");
@@ -46,7 +49,7 @@ describe("runSync", () => {
   });
 
   it("does nothing when both sides already know the same messages", async () => {
-    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const storeA = createInMemoryRelayStore([message]);
     const storeB = createInMemoryRelayStore([message]);
     const [connA, connB] = createSimulatedPeerPair("device-a", "device-b");
@@ -83,8 +86,8 @@ describe("runSync", () => {
   });
 
   it("returns interrupted:true with whatever completed, when the peer disappears mid-transfer (spec §42)", async () => {
-    const message1 = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
-    const message2 = await buildEmergencyMessage(makePayload("device-a:msg-2"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message1 = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
+    const message2 = await buildEmergencyMessage(makePayload("device-a:msg-2"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const store = createInMemoryRelayStore([message1, message2]);
 
     let sendCount = 0;

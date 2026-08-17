@@ -1,3 +1,4 @@
+import { generateDeviceKeyPair } from "@tulonglink/crypto";
 import { describe, expect, it } from "vitest";
 import type { CreateEmergencyInput } from "@tulonglink/shared";
 import type { EmergencyMessage } from "@tulonglink/protocol";
@@ -27,11 +28,12 @@ function makePayload(incidentId: string, expiresAt = "2026-08-17T08:00:00.000Z")
 }
 
 const now = new Date("2026-08-16T12:00:00.000Z");
+const signingKeys = await generateDeviceKeyPair();
 
 describe("runGatewayUpload", () => {
   it("uploads every not-yet-uploaded message and marks it uploaded", async () => {
-    const m1 = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
-    const m2 = await buildEmergencyMessage(makePayload("device-a:msg-2"), "device-a", "2026-08-16T08:00:00.000Z");
+    const m1 = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
+    const m2 = await buildEmergencyMessage(makePayload("device-a:msg-2"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const store = createInMemoryRelayStore([m1, m2]);
     const uploaded: string[] = [];
 
@@ -49,7 +51,7 @@ describe("runGatewayUpload", () => {
   });
 
   it("does not upload a message twice, and does not remove it from the relay store", async () => {
-    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const store = createInMemoryRelayStore([message]);
     const uploadCalls: string[] = [];
 
@@ -63,7 +65,7 @@ describe("runGatewayUpload", () => {
   });
 
   it("leaves a failed upload for the next opportunity, without marking it uploaded", async () => {
-    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z");
+    const message = await buildEmergencyMessage(makePayload("device-a:msg-1"), "device-a", "2026-08-16T08:00:00.000Z", signingKeys);
     const store = createInMemoryRelayStore([message]);
 
     const result = await runGatewayUpload(
@@ -82,7 +84,8 @@ describe("runGatewayUpload", () => {
     const expired = await buildEmergencyMessage(
       makePayload("device-a:expired", "2026-08-16T00:00:00.000Z"),
       "device-a",
-      "2026-08-15T08:00:00.000Z"
+      "2026-08-15T08:00:00.000Z",
+      signingKeys
     );
     const store = createInMemoryRelayStore([expired]);
     const uploadFn = async (_message: EmergencyMessage) => {

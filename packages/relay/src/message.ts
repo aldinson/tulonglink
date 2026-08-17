@@ -1,5 +1,6 @@
 import { PROTOCOL_VERSION, type EmergencyMessage } from "@tulonglink/protocol";
 import type { CreateEmergencyInput } from "@tulonglink/shared";
+import { exportPublicKeyRaw, signBytes, type DeviceKeyPair } from "@tulonglink/crypto";
 
 /**
  * Key order shouldn't change what a payload hashes to — two devices
@@ -25,6 +26,17 @@ export async function computePayloadHash(payload: CreateEmergencyInput): Promise
 }
 
 /**
+ * What the signature actually covers: the message's identity, content
+ * commitment, and TTL — not the full payload bytes again, since
+ * `payloadHash` already commits to those. Binding `messageId` and
+ * `expiresAt` stops a relay hop from lifting a valid signature onto a
+ * different message ID or a stretched TTL.
+ */
+export function signaturePayload(messageId: string, payloadHash: string, expiresAt: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(`${messageId}|${payloadHash}|${expiresAt}`);
+}
+
+/**
  * Builds the wire envelope for a locally-created emergency (spec §53).
  * `messageId` reuses `payload.incidentId` rather than minting a second
  * ID — it's already globally unique and relay-safe (spec §23; see
@@ -33,15 +45,27 @@ export async function computePayloadHash(payload: CreateEmergencyInput): Promise
 export async function buildEmergencyMessage(
   payload: CreateEmergencyInput,
   originDeviceId: string,
-  timestamp: string
+  timestamp: string,
+  signingKeys: DeviceKeyPair
 ): Promise<EmergencyMessage> {
+  const payloadHash = await computePayloadHash(payload);
+  const expiresAt = payload.expiresAt;
+  const messageId = payload.incidentId;
+
+  const [signature, originPublicKey] = await Promise.all([
+    signBytes(signingKeys.privateKey, signaturePayload(messageId, payloadHash, expiresAt)),
+    exportPublicKeyRaw(signingKeys.publicKey),
+  ]);
+
   return {
-    messageId: payload.incidentId,
+    messageId,
     originDeviceId,
     protocolVersion: PROTOCOL_VERSION,
     timestamp,
     payload,
-    payloadHash: await computePayloadHash(payload),
-    expiresAt: payload.expiresAt,
+    payloadHash,
+    expiresAt,
+    signature,
+    originPublicKey,
   };
 }

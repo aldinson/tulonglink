@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CreateEmergencyInput } from "@tulonglink/shared";
+import { generateDeviceKeyPair } from "@tulonglink/crypto";
 import { buildEmergencyMessage } from "./message.js";
 import { createInMemoryRelayStore } from "./inMemoryRelayStore.js";
 import { buildMessageSummary, diffKnownIds } from "./messageSummary.js";
@@ -45,15 +46,18 @@ describe("diffKnownIds", () => {
 describe("buildMessageSummary", () => {
   it("prunes expired messages from the store and excludes them from the summary (spec §25)", async () => {
     const now = new Date("2026-08-16T12:00:00.000Z");
+    const signingKeys = await generateDeviceKeyPair();
     const live = await buildEmergencyMessage(
       makePayload("device-a:live", "2026-08-17T00:00:00.000Z"),
       "device-a",
-      "2026-08-16T08:00:00.000Z"
+      "2026-08-16T08:00:00.000Z",
+      signingKeys
     );
     const expired = await buildEmergencyMessage(
       makePayload("device-a:expired", "2026-08-16T00:00:00.000Z"),
       "device-a",
-      "2026-08-15T08:00:00.000Z"
+      "2026-08-15T08:00:00.000Z",
+      signingKeys
     );
     const store = createInMemoryRelayStore([live, expired]);
 

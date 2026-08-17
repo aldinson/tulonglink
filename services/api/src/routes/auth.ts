@@ -3,10 +3,11 @@ import { requestOtpSchema, verifyOtpSchema, refreshSchema } from "@tulonglink/sh
 import { requestOtp, verifyOtp, refresh, logout } from "../controllers/authController.js";
 import { validateBody } from "../middleware/validate.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
+import { otpRateLimiter } from "../middleware/rateLimit.js";
 
 export const authRouter = Router();
 
-authRouter.post("/request-otp", validateBody(requestOtpSchema), asyncHandler(requestOtp));
-authRouter.post("/verify-otp", validateBody(verifyOtpSchema), asyncHandler(verifyOtp));
+authRouter.post("/request-otp", otpRateLimiter, validateBody(requestOtpSchema), asyncHandler(requestOtp));
+authRouter.post("/verify-otp", otpRateLimiter, validateBody(verifyOtpSchema), asyncHandler(verifyOtp));
 authRouter.post("/refresh", validateBody(refreshSchema), asyncHandler(refresh));
 authRouter.post("/logout", asyncHandler(logout));
