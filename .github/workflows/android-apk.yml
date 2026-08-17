@@ -1,0 +1,68 @@
+name: Build Android APK
+
+# Manual by default — there's no Kotlin behind BleRelayPlugin yet
+# (see apps/android/README.md), so a build today produces an app with
+# the web UI but no working relay. Once real native code lands, add a
+# `push`/`pull_request` trigger scoped to apps/android/** and
+# apps/web/** so it builds automatically again.
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "VITE_API_BASE_URL to bake into this build (leave blank for the app's localhost:4000 default — only useful for an emulator/same-machine test, not a real device)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # Windows+exFAT symlink issues (see README.md) don't apply here —
+      # this is a Linux runner with a normal filesystem.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build the PWA
+        env:
+          VITE_API_BASE_URL: ${{ inputs.api_base_url }}
+        run: npm run build -w @tulonglink/web
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      # ubuntu-latest ships the Android SDK preinstalled; this only
+      # handles license acceptance so Gradle's own SDK auto-download
+      # (for whatever build-tools/platform version the generated
+      # project needs) doesn't hang on an interactive prompt.
+      - name: Accept Android SDK licenses
+        run: yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Generate the native Android project (if not already committed)
+        working-directory: apps/android
+        run: |
+          if [ ! -d android ]; then
+            npm install @capacitor/android
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Build debug APK
+        working-directory: apps/android/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tulonglink-debug-apk
+          path: apps/android/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
