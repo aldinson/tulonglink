@@ -50,7 +50,11 @@ jobs:
         working-directory: apps/android
         run: |
           if [ ! -d android ]; then
-            npm install @capacitor/android
+            # Pinned to match @capacitor/core/cli (^6.1.2) elsewhere in
+            # the workspace — an unpinned install pulls latest (v8),
+            # which needs @capacitor/core@^8 and fails npm's peer
+            # dependency resolution against the v6 already in use.
+            npm install @capacitor/android@^6.1.2
             npx cap add android
           fi
           npx cap sync android
