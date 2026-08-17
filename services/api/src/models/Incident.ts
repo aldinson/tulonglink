@@ -1,9 +1,10 @@
-import { Schema, model } from "mongoose";
+import { Schema, model, type HydratedDocument } from "mongoose";
 import {
   DELIVERY_STATES,
   EMERGENCY_CATEGORIES,
   EMERGENCY_PRIORITIES,
   INCIDENT_STATUSES,
+  RESPONDER_TYPES,
   type Emergency,
 } from "@tulonglink/shared";
 
@@ -26,9 +27,14 @@ const incidentSchema = new Schema<Emergency>({
   messageVersion: { type: Number, required: true },
   expiresAt: { type: String, required: true },
   deliveryState: { type: String, required: true, enum: DELIVERY_STATES, index: true },
-  incidentStatus: { type: String, enum: INCIDENT_STATUSES, default: null },
+  incidentStatus: { type: String, enum: INCIDENT_STATUSES, default: null, index: true },
+  assignedResponderId: { type: String, default: null },
+  assignedResponderType: { type: String, enum: RESPONDER_TYPES, default: null },
+  assignedBy: { type: String, default: null },
+  assignedAt: { type: String, default: null },
 });
 
 incidentSchema.index({ latitude: 1, longitude: 1 });
 
 export const IncidentModel = model<Emergency>("Incident", incidentSchema, "incidents");
+export type IncidentDocument = HydratedDocument<Emergency>;

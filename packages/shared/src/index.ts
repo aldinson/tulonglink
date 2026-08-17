@@ -5,3 +5,4 @@ export * from "./types/community.js";
 export * from "./types/auth.js";
 export * from "./validation/emergency.js";
 export * from "./validation/auth.js";
+export * from "./validation/incidentActions.js";

@@ -56,6 +56,14 @@ export const INCIDENT_STATUSES = [
 ] as const;
 export type IncidentStatus = (typeof INCIDENT_STATUSES)[number];
 
+/**
+ * Spec §37's assignment categories. A responder is an existing STAFF/ADMIN
+ * user tagged with one of these at assignment time — there is no separate
+ * roster/CRUD collection yet (that's Phase 6's "Manage responders", §8.3).
+ */
+export const RESPONDER_TYPES = ["TANOD", "MEDICAL", "FIRE", "RESCUE", "OTHER"] as const;
+export type ResponderType = (typeof RESPONDER_TYPES)[number];
+
 /** Protocol/message schema version, independent of app release version. */
 export const EMERGENCY_MESSAGE_VERSION = 1;
 
@@ -84,6 +92,11 @@ export interface Emergency {
   expiresAt: string;
   deliveryState: DeliveryState;
   incidentStatus: IncidentStatus | null;
+  /** Set together, only by `POST /api/incidents/:id/assign` (spec §37). */
+  assignedResponderId: string | null;
+  assignedResponderType: ResponderType | null;
+  assignedBy: string | null;
+  assignedAt: string | null;
 }
 
 /** Local audit trail of what has actually happened to an emergency (§16, §31). */

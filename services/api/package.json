@@ -7,6 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "seed": "tsx src/scripts/seedCommunity.ts",
+    "promote-user": "tsx src/scripts/promoteUser.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -27,6 +28,9 @@
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^20.14.15",
+    "@types/supertest": "^6.0.2",
+    "mongodb-memory-server": "^10.0.0",
+    "supertest": "^7.0.0",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
   }

@@ -35,6 +35,21 @@ without removing them from what it still offers to other peers. The full
 literal MVP proof — is integration-tested in simulation. No responder
 dashboard yet; that's Phase 5.
 
+**Phase 5** (responder dashboard, spec §35-37) is implemented and
+verified end-to-end against a real (in-memory) MongoDB — not just
+simulated. STAFF/ADMIN users get a role-gated dashboard
+(`apps/web/src/pages/dashboard/`) with a New/Critical/Active/Resolved
+incident queue, a Leaflet map, and a detail view with
+acknowledge/assign/start-progress/resolve/cancel actions and an audit
+trail. Server-side, every status change is validated against an
+explicit state machine (`services/api/src/services/incidentStatusMachine.ts`)
+and recorded as an `IncidentEvent` reusing the same `DeliveryState`
+vocabulary the resident-facing pipeline already uses. There is still no
+path in the app to *create* a STAFF account (`npm run promote-user`,
+below, is a local-dev-only stand-in) and no way for a resident's client
+to pull status changes back down — see the decision records below for
+both.
+
 ## Layout
 
 ```text
@@ -82,6 +97,10 @@ cp services/api/.env.example services/api/.env
 npm run dev:api                 # http://localhost:4000
 npm run seed -w @tulonglink/api # seeds a "Demo Community" (never Napo — spec §9)
 
+# Responder dashboard access: register normally (request-otp/verify-otp), then
+# promote that phone number — there's no in-app way to do this yet (Phase 6):
+npm run promote-user -w @tulonglink/api -- +639171234567 STAFF
+
 # Web
 cp apps/web/.env.example apps/web/.env
 npm run dev:web                 # http://localhost:5173
@@ -120,7 +139,7 @@ npm run test        # vitest across all workspaces
 npm run typecheck    # tsc --noEmit across all workspaces
 ```
 
-Verified passing (47/47 tests, clean typecheck, clean `vite build` with
+Verified passing (65/65 tests, clean typecheck, clean `vite build` with
 the PWA service worker generated) on an NTFS copy of this tree, for the
 reason noted above.
 
@@ -129,11 +148,25 @@ queue logic, the API's token/OTP services, and the web app's offline
 emergency-creation path (via `fake-indexeddb`). `packages/relay` adds
 integration tests too — multi-hop relay, cross-path dedup, and the full
 `A → B → C → D → Server` gateway chain, all over a simulated
-transport/fake upload — but nothing here touches real Bluetooth hardware
-or a real MongoDB. Add a Mongo integration suite (e.g. with
-`mongodb-memory-server`) when that's worth the added dependency; a real
-BLE proof needs the native plugin and physical devices (see
-`apps/android/README.md`) and can't be a `vitest` suite at all.
+transport/fake upload — still nothing here touches real Bluetooth
+hardware. `services/api` now also has real Mongo-backed controller
+integration tests (`mongodb-memory-server` + `supertest`) for the Phase
+5 incident-action endpoints — the trigger condition this section used
+to say would justify adding it. A real BLE proof still needs the native
+plugin and physical devices (see `apps/android/README.md`) and can't be
+a `vitest` suite at all.
+
+Phase 5 was additionally verified live: both dev servers running
+against a real (in-memory) MongoDB, driven end-to-end with `curl` —
+register, promote to STAFF, create an incident as a resident, then
+acknowledge → assign → start-progress (`PATCH`) → resolve as staff, and
+read back the audit trail — every step returned the expected
+state/delivery-state/event. The dashboard's own React components were
+verified by typecheck, a clean production build, and confirming every
+new module transforms without error through the Vite dev server; there
+was no browser control available in this session to click through the
+UI itself, so that specific layer — does it *render and look* right —
+is unverified and should be checked in a real browser before relying on it.
 
 ## Architecture decisions (Milestone 1)
 
@@ -268,6 +301,61 @@ Migration path, per `CLAUDE.md`.
   both sides' next summary and gets re-offered on the next connection —
   no explicit resume-from-where-it-left-off logic. Acceptable: spec §45
   already assumes exactly this kind of retry-via-next-opportunity.
+
+### A responder is an existing STAFF/ADMIN user, not a separate roster entity
+- **Reason:** spec §40 lists a `responders` collection and §37 wants
+  assignment to a typed responder (Tanod/Medical/Fire/Rescue/Other), but
+  admin-managed roster CRUD is explicitly §8.3's "Manage responders" —
+  Phase 6. Modeling assignment as "an existing STAFF/ADMIN user, tagged
+  with a `responderType` at assignment time" satisfies §37's fields
+  (`incidentId`/`responderId`/`assignedBy`/`assignedAt`, stored directly
+  on the incident) without a second collection nothing yet manages.
+- **Alternatives:** a real `responders` collection with its own CRUD
+  (rejected — that's Phase 6's admin tooling, out of proportion to what
+  Phase 5's dashboard needs); letting `assign` take a free-text name
+  (rejected — no referential integrity, nothing to validate against).
+- **Advantages:** reuses `UserModel`/roles that already exist; assigning
+  to a nonexistent or resident account is rejected server-side
+  (`assignIncident`, `services/api/src/controllers/incidentController.ts`).
+- **Limitations:** "Fire responder" or "Rescue responder" as external
+  contacts with no TulongLink login (a real possibility per §37's list)
+  aren't representable yet — only existing staff accounts are assignable.
+- **Migration path:** Phase 6's roster, if it adds one, can extend
+  `responderType`/assignment without touching the incident schema or
+  the status machine — assignment already treats it as opaque metadata.
+
+### Status transitions never fabricate a skipped intermediate event
+- **Reason:** the resident-facing `DeliveryStatus` pipeline
+  (`apps/web/src/components/DeliveryStatus.tsx`) only reads
+  `Emergency.deliveryState` (one field), not the event history, so it
+  renders correctly whether or not every intermediate status was
+  individually recorded. That freed the state machine
+  (`services/api/src/services/incidentStatusMachine.ts`) to allow
+  `NEW → ASSIGNED` directly, recording exactly one `ASSIGNED` event —
+  not a synthesized `ACKNOWLEDGED` event staff never actually performed.
+- **Reason (cont.):** CLAUDE.md's delivery-accuracy principle ("never
+  imply an event happened that didn't") applies to the staff-facing
+  audit trail as much as the resident-facing pipeline — a fabricated
+  acknowledgment would be exactly the kind of implied-but-false event
+  that principle rules out, even though nothing outside this codebase
+  would likely notice.
+- **Advantages:** the audit trail is always literally true; the allowed-
+  transitions table stays small (no "acknowledge-then-assign" special
+  case to encode).
+- **Limitations:** a dashboard view that assumed every incident has an
+  `ACKNOWLEDGED` event before `ASSIGNED` would be wrong — none should be
+  built that way; query actual status/events, don't assume the sequence.
+
+### `PATCH /api/incidents/:id` carries the two actions with no dedicated route
+- **Reason:** spec §41 lists `PATCH /api/incidents/:id` alongside the
+  three named action endpoints but doesn't say what it's for. Rather
+  than invent a `/cancel` endpoint the spec never names,
+  `patchIncidentSchema` restricts the generic PATCH to exactly the two
+  transitions with no dedicated route (`IN_PROGRESS`, `CANCELLED`) —
+  using the literal endpoint list instead of extending it.
+- **Migration path:** if a fourth named action becomes worth its own
+  route later, move it out of the PATCH allowlist the same way
+  acknowledge/assign/resolve already have their own routes.
 
 ### Auth: OTP + swappable provider, JWT with offline-tolerant session
 - **Reason:** spec §10 requires the OTP provider to be swappable (mock

@@ -107,6 +107,10 @@ export async function createEmergency(params: CreateEmergencyParams): Promise<Em
     expiresAt: new Date(now.getTime() + ttlHours * 3600_000).toISOString(),
     deliveryState: "LOCAL_ONLY",
     incidentStatus: null,
+    assignedResponderId: null,
+    assignedResponderType: null,
+    assignedBy: null,
+    assignedAt: null,
   };
 
   const event: EmergencyEvent = {

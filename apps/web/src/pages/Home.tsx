@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { EmergencyCategory } from "@tulonglink/shared";
 import { NetworkBadge } from "../components/NetworkBadge.js";
+import { useAuth } from "../context/AuthContext.js";
 
 /**
  * Spec §15's primary screen also has a SEND HELP / SOS beacon button
@@ -19,6 +20,9 @@ const CATEGORIES: { category: EmergencyCategory; label: string }[] = [
 ];
 
 export function Home() {
+  const { session } = useAuth();
+  const isResponder = session && session.role !== "RESIDENT";
+
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
@@ -47,6 +51,15 @@ export function Home() {
       >
         View my reports
       </Link>
+
+      {isResponder && (
+        <Link
+          to="/dashboard"
+          className="mt-2 text-center text-sm font-medium text-gray-600 underline"
+        >
+          Responder Dashboard
+        </Link>
+      )}
     </div>
   );
 }
