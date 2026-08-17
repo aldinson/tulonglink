@@ -34,7 +34,7 @@ jobs:
           VITE_API_BASE_URL: ${{ inputs.api_base_url }}
         run: npm run build -w @tulonglink/web
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: "temurin"
           java-version: "17"
